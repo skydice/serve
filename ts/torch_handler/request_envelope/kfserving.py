@@ -4,6 +4,8 @@ Input Request inside Torchserve.
 """
 import json
 import logging
+from itertools import chain
+
 from .base import BaseEnvelope
 
 logger = logging.getLogger(__name__)
@@ -19,24 +21,12 @@ class KFservingEnvelope(BaseEnvelope):
     Returns:
         [list]: Returns the list of the Input Request in Torchserve Format
     """
+    _lengths = []
 
     def parse_input(self, data):
-        logger.info("Parsing input in KFServing.py")
-        self._data_list = [row.get("data") or row.get("body") for row in data]
-        # selecting the first input from the list torchserve creates
-        logger.info("Parse input data_list %s", self._data_list)
-        data = self._data_list[0]
-
-        # If the KF Transformer and Explainer sends in data as bytesarray
-        if isinstance(data, (bytes, bytearray)):
-
-            data = data.decode()
-            data = json.loads(data)
-            logger.info("Bytes array is %s", data)
-
-        self._inputs = data.get("instances")
-        logger.info("KFServing parsed inputs %s", self._inputs)
-        return self._inputs
+        lengths, batch = self._batch_from_kf(data)
+        self._lengths = lengths
+        return batch
 
     def format_output(self, data):
         """
@@ -48,13 +38,44 @@ class KFservingEnvelope(BaseEnvelope):
         Returns:
             (list): The response is returned as a list of predictions and explanations
         """
-        response = {}
-        logger.info("The Response of KFServing %s", data)
+        return self._batch_to_data(data, self._lengths)
+
+    def _batch_from_kf(self, data_rows):
+        mini_batches = [self._from_kf(data_row) for data_row in data_rows]
+        lengths = [len(mini_batch) for mini_batch in mini_batches]
+        full_batch = list(chain.from_iterable(mini_batches))
+        return lengths, full_batch
+
+    def _from_kf(self, data):
+        rows = (data.get('data') or data.get('body') or data)['instances']
+        for row_i, row in enumerate(rows):
+            if list(row.keys()) == ['data']:
+                if isinstance(row['data'], (bytes, bytearray)):
+                    rows[row_i] = json.loads(row['data'].decode())
+        return rows
+
+    def _batch_to_kf(self, batch, lengths):
+        outputs = []
+        cursor = 0
+        for length in lengths:
+            cursor_end = cursor + length
+
+            mini_batch = batch[cursor:cursor_end]
+            outputs.append(self._to_kf(mini_batch))
+
+            cursor = cursor_end
+        return outputs
+
+    def _to_kf(self, output):
         if not self._is_explain():
-            response["predictions"] = data
+            out_dict = {
+                'predictions': output
+            }
         else:
-            response["explanations"] = data
-        return [response]
+            out_dict = {
+                'explanations': output
+            }
+        return out_dict
 
     def _is_explain(self):
         if self.context and self.context.get_request_header(0, "explain"):

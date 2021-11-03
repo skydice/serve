@@ -62,3 +62,21 @@ def test_handle_kf(model_setup):
     #testing for predict API
     results = envelope.handle([test_data], context)
     assert(results[0]["predictions"][0] in range(0, 9))
+
+def test_handle_batch_kf(model_setup):
+    context, bytes_array = model_setup
+    image = Image.open(io.BytesIO(bytes_array))
+    image_list = image_processing(image).tolist()
+    envelope = test_initialize_kf(model_setup)
+    test_data = [
+        {'body': {'instances': [{'data': image_list}]}},
+        {'body': {'instances': [{'data': image_list}, {'data': image_list}]}},
+        {'body': {'instances': [{'data': image_list}]}}
+    ]
+
+    #testing for predict API
+    results = envelope.handle(test_data, context)
+    assert(results[0]["predictions"][0] in range(0, 9))
+    assert(results[1]["predictions"][0] in range(0, 9))
+    assert(results[1]["predictions"][1] in range(0, 9))
+    assert(results[2]["predictions"][0] in range(0, 9))
